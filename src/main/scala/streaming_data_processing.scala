@@ -38,6 +38,6 @@ object streaming_data_processing {
 //**
     ssc.start()
     ssc.awaitTermination()
-
+//
   }
 }
