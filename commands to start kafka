@@ -1,3 +1,5 @@
 1- start zookeper : .\bin\windows\zookeeper-server-start.bat .\config\zookeeper.properties
 2- start kafka : .\bin\windows\kafka-server-start.bat .\config\server.properties
 3- start kafka topic and connect with spark : .\bin\windows\kafka-console-producer.bat --topic TEST --broker-list localhost:9092
+4- to freeup kafka-logs space : a- move C:\kafka_2.12-3.8.1\kafka-logs C:\kafka_2.12-3.8.1\kafka-logs-backup
+                                b- mkdir C:\kafka_2.12-3.8.1\kafka-logs
