@@ -1,15 +1,19 @@
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.spark.SparkConf
-import org.apache.spark.streaming.kafka010.LocationStrategies.PreferConsistent
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.kafka010.{ConsumerStrategies, KafkaUtils, LocationStrategies}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
-import org.glassfish.jersey.internal.jsr166.Flow.Subscriber
-import org.apache.spark.sql.{DataFrame, SparkSession}
+
+import org.apache.spark.sql.{ SparkSession}
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types._
-import scala.util.parsing.json._
-import org.apache.spark.streaming.dstream.DStream
+
+
+import java.io.File
+import scala.collection.mutable
+
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 
 case class user_info(id: String, name: String)
 
@@ -19,11 +23,33 @@ case class TweetInfo(id: String, text: String, hashtags: Seq[String], timestamp:
 
 object streaming_data_processing {
   def main(args: Array[String]): Unit = {
+    val filePath = "C:\\Users\\Admin\\Desktop\\pro_big_scala\\Copy of Positive and Negative Word List.xlsx"
+
+    val workbook = new XSSFWorkbook(new File(filePath))
+
+    val sheet = workbook.getSheetAt(0)
+    val badWordsSet = mutable.Set[String]()
+    val goodWordsSet = mutable.Set[String]()
+
+
+    for (row <- 1 to sheet.getPhysicalNumberOfRows - 1) {
+      val badWordCell = sheet.getRow(row).getCell(0)
+      val goodWordCell = sheet.getRow(row).getCell(1)
+
+      if (badWordCell != null) {
+        badWordsSet.add(badWordCell.getStringCellValue)
+      }
+      if (goodWordCell != null) {
+        goodWordsSet.add(goodWordCell.getStringCellValue)
+      }
+    }
+
+
 
     //    configuration for kafka
     val brokers = "localhost:9092"
     val groupId = "GRP1"
-    val topics = "test2" // multiple topics (separated by comma)
+    val topics = "my-topic" // multiple topics (separated by comma)
 
     val SparkConf = new SparkConf().setMaster("local[*]").setAppName("streaming_data_processing")
     val ssc = new StreamingContext(SparkConf, Seconds(10))
@@ -48,12 +74,21 @@ object streaming_data_processing {
 
     // Extract JSON values from Kafka messages
     val jsonStream = messages.map(record => record.value())
+    val sentimentUDF = udf((text: String) => {
+      val words = text.toLowerCase.split("\\W+")
+      val goodScore = words.count(word => goodWordsSet.contains(word))
+      val badScore = words.count(word => badWordsSet.contains(word))
 
+      if (goodScore > badScore) "Positive"
+      else if (badScore > goodScore) "Negative"
+      else "Neutral"
+    })
     // Process each RDD in the DStream
     jsonStream.foreachRDD { rdd =>
       if (!rdd.isEmpty()) {
         // Convert RDD[String] to DataFrame
         val df = spark.read.json(rdd)
+
         //        df.show(truncate = false)
         val wanted_data = df.select("tweet_id", "text", "hashtags", "lat", "lon", "created_at", "user_id", "user_name")
         //        wanted_data.show(truncate = false)
@@ -61,7 +96,10 @@ object streaming_data_processing {
         //        cleaned_df.show(truncate = false)
         val splitDF = cleaned_df.withColumn("hashtags", split(col("hashtags"), ","))
         //        splitDF.show(false)
-        val nestedDF = splitDF.map(r => TweetInfo(r.getString(0), r.getString(1), r.getAs[Seq[String]](2), r.getString(5), coordinates(r.getDouble(3), r.getDouble(4)), "sentiment", user_info(r.getString(6), r.getString(7))))
+         val secall =splitDF.withColumn("sentiment", sentimentUDF(col("text")))
+
+
+        val nestedDF = secall.map(r => TweetInfo(r.getString(0), r.getString(1), r.getAs[Seq[String]](2), r.getString(5), coordinates(r.getDouble(3), r.getDouble(4)),r.getString(8), user_info(r.getString(6), r.getString(7))))
         //        nestedDF.show(false)
 
         // Convert DataFrame to JSON strings
@@ -74,7 +112,8 @@ object streaming_data_processing {
         val jsonString = jsonArray.mkString("[", ",", "]")
 
         // Output the JSON string
-//        println(jsonString)
+              println(jsonString)
+
       }
     }
 
