@@ -6,17 +6,21 @@ import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
+
 import java.io.File
 import scala.collection.mutable
 import java.util.Properties
-
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
+
+import java.sql.Timestamp
+
+
 
 case class user_info(id: String, name: String)
 
 case class coordinates(latitude: Double, longitude: Double)
 
-case class TweetInfo(id: String, text: String, hashtags: Seq[String], timestamp: String, location: coordinates, sentiment: String, user: user_info)
+case class TweetInfo(id: String, text: String, hashtags: Seq[String], timestamp: Timestamp, location: coordinates, sentiment: String, user: user_info)
 
 object streaming_data_processing {
   def main(args: Array[String]): Unit = {
@@ -30,6 +34,8 @@ object streaming_data_processing {
     val sc = ssc.sparkContext
     sc.setLogLevel("ERROR")
     val spark = SparkSession.builder().config(SparkConf).getOrCreate()
+
+    spark.conf.set("spark.sql.legacy.timeParserPolicy", "LEGACY")
     import spark.implicits._
 
     val topicSet = topics.split(",").toSet
@@ -103,13 +109,21 @@ object streaming_data_processing {
         // add sentiment column
         val sentimentDF = splitDF.withColumn("sentiment", sentimentUDF(col("text")))
 
+        val dfWithTimestamp = sentimentDF.withColumn(
+          "created_at",
+          to_timestamp(col("created_at"), "EEE MMM dd HH:mm:ss ZZZ yyyy")
+        )
+
         // create json format
-        val JSONformat = sentimentDF.map(r => TweetInfo(r.getString(0), r.getString(1), r.getAs[Seq[String]](2), r.getString(5), coordinates(r.getDouble(3), r.getDouble(4)), r.getString(8), user_info(r.getString(6), r.getString(7))))
+        val JSONformat = dfWithTimestamp.map(r => TweetInfo(r.getString(0), r.getString(1), r.getAs[Seq[String]](2), r.getTimestamp(5), coordinates(r.getDouble(3), r.getDouble(4)), r.getString(8), user_info(r.getString(6), r.getString(7))))
+
+        JSONformat.show(truncate = false)
 
         // convert dataframe to json then sen it to kafka
         JSONformat.toJSON.collect().foreach { jsonRecord =>
           val record = new ProducerRecord[String, String]("send_consumer_data", null, jsonRecord)
           producer.send(record)
+          println("data have been sent")
         }
       }
       else println("no data received")
