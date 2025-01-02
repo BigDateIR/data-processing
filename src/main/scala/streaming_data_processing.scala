@@ -20,7 +20,7 @@ case class user_info(id: String, name: String)
 
 case class coordinates(latitude: Double, longitude: Double)
 
-case class TweetInfo(id: String, text: String, hashtags: Seq[String], timestamp: Timestamp, location: coordinates, sentiment: String, user: user_info)
+case class TweetInfo(tweet_id: String, text: String, hashtags: Seq[String], timestamp: Timestamp, location: coordinates, sentiment: String, user: user_info)
 
 object streaming_data_processing {
   def main(args: Array[String]): Unit = {
@@ -95,27 +95,33 @@ object streaming_data_processing {
     // Process each RDD in the DStream
     jsonStream.foreachRDD { rdd =>
       if (!rdd.isEmpty()) {
+
+        println("data have been sent")
+
         // Convert RDD[String] to DataFrame
         val df = spark.read.json(rdd)
 
         val wanted_data = df.select("tweet_id", "text", "hashtags", "lat", "lon", "created_at", "user_id", "user_name")
 
-        // replace null values
-        val cleaned_df = wanted_data.na.fill("N/A", Seq("tweet_id", "text", "hashtags", "created_at", "user_id", "user_name")).na.fill(0.0f, Seq("lat", "lon"))
-
+        val change_col_DF = wanted_data
         // create list of hashtags
-        val splitDF = cleaned_df.withColumn("hashtags", split(col("hashtags"), ","))
+          .withColumn("hashtags", split(col("hashtags"), ","))
+          // add sentiment column
+          .withColumn("sentiment", sentimentUDF(col("text")))
+          //change created_at type to timestamp
+          .withColumn(
+            "created_at",
+            to_timestamp(col("created_at"), "EEE MMM dd HH:mm:ss ZZZ yyyy")
+          )
 
-        // add sentiment column
-        val sentimentDF = splitDF.withColumn("sentiment", sentimentUDF(col("text")))
+        // replace null values
+        val cleaned_df = change_col_DF
+          .na.fill("N/A", Seq("tweet_id", "text","sentiment", "hashtags", "created_at", "user_id", "user_name"))
+          .na.fill(0.0f, Seq("lat", "lon"))
 
-        val dfWithTimestamp = sentimentDF.withColumn(
-          "created_at",
-          to_timestamp(col("created_at"), "EEE MMM dd HH:mm:ss ZZZ yyyy")
-        )
-
+        //case class TweetInfo(tweet_id: String, text: String, hashtags: Seq[String], timestamp: Timestamp, location: coordinates, sentiment: String, user: user_info)
         // create json format
-        val JSONformat = dfWithTimestamp.map(r => TweetInfo(r.getString(0), r.getString(1), r.getAs[Seq[String]](2), r.getTimestamp(5), coordinates(r.getDouble(3), r.getDouble(4)), r.getString(8), user_info(r.getString(6), r.getString(7))))
+        val JSONformat = cleaned_df.map(r => TweetInfo(r.getString(0), r.getString(1), r.getAs[Seq[String]](2), r.getTimestamp(5), coordinates(r.getDouble(3), r.getDouble(4)), r.getString(8), user_info(r.getString(6), r.getString(7))))
 
         JSONformat.show(truncate = false)
 
@@ -123,7 +129,6 @@ object streaming_data_processing {
         JSONformat.toJSON.collect().foreach { jsonRecord =>
           val record = new ProducerRecord[String, String]("send_consumer_data", null, jsonRecord)
           producer.send(record)
-          println("data have been sent")
         }
       }
       else println("no data received")
